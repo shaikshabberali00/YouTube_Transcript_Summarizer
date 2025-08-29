@@ -16,10 +16,8 @@ from gtts import gTTS
 import os
 from langdetect import detect, DetectorFactory
 from langdetect.lang_detect_exception import LangDetectException
-from googletrans import Translator
 from deep_translator import GoogleTranslator
-from translate import Translator
-from langdetect import detect, LangDetectException
+
 
 # Set a seed value for reproducibility (optional)
 DetectorFactory.seed = 0
