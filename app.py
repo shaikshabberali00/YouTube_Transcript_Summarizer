@@ -1,16 +1,25 @@
 # Importing Libraries
-from io import BytesIO
 import streamlit as st
+import requests
+from io import BytesIO
 from PIL import Image
 
-# Example: save dynamic image safely
-buf = BytesIO()
-image.save(buf, format="PNG")
-st.image(buf.getvalue(), caption="Result")
+# Example YouTube thumbnail URL
+url = "https://i.ytimg.com/vi/OQSKjsrUWFA/hqdefault.jpg"
+
+# Fetch image bytes
+response = requests.get(url)
+img_bytes = BytesIO(response.content)
+
+# Open image with PIL
+image = Image.open(img_bytes)
+
+# Display image in Streamlit
+st.image(image, caption="Video Thumbnail", use_column_width=True)
+
 
 import base64
 from bs4 import BeautifulSoup
-import requests
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from youtube_transcript_api.formatters import JSONFormatter
 from urllib.parse import urlparse, parse_qs
