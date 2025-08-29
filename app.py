@@ -1,5 +1,13 @@
 # Importing Libraries
+from io import BytesIO
 import streamlit as st
+from PIL import Image
+
+# Example: save dynamic image safely
+buf = BytesIO()
+image.save(buf, format="PNG")
+st.image(buf.getvalue(), caption="Result")
+
 import base64
 from bs4 import BeautifulSoup
 import requests
@@ -17,6 +25,7 @@ from langdetect import detect, DetectorFactory
 from langdetect.lang_detect_exception import LangDetectException
 from deep_translator import GoogleTranslator
 import os
+os.environ["STREAMLIT_WATCHDOG"] = "false"
 
 # Set a seed value for reproducibility
 DetectorFactory.seed = 0
