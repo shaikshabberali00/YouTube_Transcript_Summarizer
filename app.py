@@ -127,43 +127,21 @@ def extract_video_id(url):
         return parsed_url.path[1:]
     return None
 
-
-# ✅ Improved Transcript Fetcher
+# generate transcript
 def generate_transcript(video_id, preferred_lang="en"):
     try:
-        transcripts = YouTubeTranscriptApi.list_transcripts(video_id)
-
-        transcript = None
-        # 1. Try exact match
+        # Try English transcript directly
         try:
-            transcript = transcripts.find_transcript([preferred_lang])
+            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[preferred_lang])
         except:
-            pass
-
-        # 2. Try variations like en-GB, en-US
-        if not transcript:
+            # Fallback: try any English variation
             try:
-                transcript = transcripts.find_transcript(
-                    [lang for lang in transcripts._manually_created_transcripts.keys() if lang.startswith(preferred_lang)]
-                )
+                transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en-US', 'en-GB'])
             except:
-                pass
+                # Fallback: just try auto-generated or whatever is available
+                transcript = YouTubeTranscriptApi.get_transcript(video_id)
 
-        # 3. Try auto-generated English transcripts
-        if not transcript:
-            try:
-                transcript = transcripts.find_transcript(
-                    [lang for lang in transcripts._generated_transcripts.keys() if lang.startswith(preferred_lang)]
-                )
-            except:
-                pass
-
-        # 4. Fallback: any available transcript
-        if not transcript:
-            transcript = list(transcripts)[0]
-
-        transcript_json = transcript.fetch()
-        script = '\n'.join([item['text'] for item in transcript_json])
+        script = '\n'.join([item['text'] for item in transcript])
         return script, len(script.split())
 
     except (TranscriptsDisabled, NoTranscriptFound):
