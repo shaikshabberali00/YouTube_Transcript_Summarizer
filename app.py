@@ -3,23 +3,7 @@ import streamlit as st
 import requests
 from io import BytesIO
 from PIL import Image
-
-# Example YouTube thumbnail URL
-url = "https://i.ytimg.com/vi/OQSKjsrUWFA/hqdefault.jpg"
-
-# Fetch image bytes
-response = requests.get(url)
-img_bytes = BytesIO(response.content)
-
-# Open image with PIL
-image = Image.open(img_bytes)
-
-# Display image in Streamlit
-st.image(image, caption="Video Thumbnail", use_column_width=True)
-
-
 import base64
-from bs4 import BeautifulSoup
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from youtube_transcript_api.formatters import JSONFormatter
 from urllib.parse import urlparse, parse_qs
@@ -36,12 +20,12 @@ from deep_translator import GoogleTranslator
 import os
 os.environ["STREAMLIT_WATCHDOG"] = "false"
 
-# Set a seed value for reproducibility
+# Seed for reproducibility
 DetectorFactory.seed = 0
 
 # Streamlit Configuration
 st.set_page_config(
-    page_title="Youtube Summariser",
+    page_title="YouTube Summariser",
     page_icon='favicon.ico',
     layout="wide",
     initial_sidebar_state="expanded",
@@ -49,7 +33,7 @@ st.set_page_config(
 
 # -------- FUNCTIONS -------- #
 
-# Function to Summarize using Spacy
+# Spacy Extractive Summarizer
 def spacy_summarize(text_content, percent):
     stop_words = list(STOP_WORDS)
     punctuation_items = punctuation + '\n'
@@ -62,7 +46,6 @@ def spacy_summarize(text_content, percent):
             word_frequencies[word.text] = word_frequencies.get(word.text, 0) + 1
 
     if not word_frequencies:
-        st.error("No valid words found for summarization.")
         return ""
 
     max_frequency = max(word_frequencies.values())
@@ -75,245 +58,130 @@ def spacy_summarize(text_content, percent):
             if word.lower() in word_frequencies:
                 sentence_scores[sent] = sentence_scores.get(sent, 0) + word_frequencies[word.lower()]
 
-    if not sentence_scores:
-        st.error("No valid sentences found for summarization.")
-        return ""
-
     select_length = int(len(sentence_token) * (int(percent) / 100))
     summary = nlargest(select_length, sentence_scores, key=sentence_scores.get)
-    final_summary = [word.text for word in summary]
-    return ' '.join(final_summary)
+    return ' '.join([sent.text for sent in summary])
 
-
-# Function to Summarize using BART
+# BART Abstractive Summarizer
 def bart_summarize(text_content, max_length=150):
     tokenizer = BartTokenizer.from_pretrained("facebook/bart-large-cnn")
     model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
-
     inputs = tokenizer.encode("summarize: " + text_content, return_tensors="pt", max_length=1024, truncation=True)
     summary_ids = model.generate(inputs, max_length=max_length, min_length=max_length//2,
                                  length_penalty=2.0, num_beams=4, early_stopping=True)
-
     return tokenizer.decode(summary_ids[0], skip_special_tokens=True)
 
-
-# Split text into chunks
+# Split text
 MAX_QUERY_LENGTH = 500
 def split_text(text, chunk_size=MAX_QUERY_LENGTH):
     return [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
 
-
 # Detect & Translate
 def detect_and_translate(text, target_language):
-    if not isinstance(text, str) or not text.strip():
-        st.error("Invalid input text.")
-        return "", ""
-    
     chunks = split_text(text)
     translated_chunks = []
-    
     for chunk in chunks:
         try:
             lang_code = detect(chunk)
-            translated_text = GoogleTranslator(source=lang_code, target=target_language).translate(chunk)
-            if translated_text and isinstance(translated_text, str) and translated_text.strip():
-                translated_chunks.append(translated_text)
-            else:
-                return "", text
-        except LangDetectException as e:
-            st.error(f"Error detecting language: {e}")
-            return "", text
-        except Exception as e:
-            st.error(f"Error during translation: {e}")
-            return "", text
-    
+            translated = GoogleTranslator(source=lang_code, target=target_language).translate(chunk)
+            translated_chunks.append(translated)
+        except Exception:
+            translated_chunks.append(chunk)  # fallback: original text
     return ' '.join(translated_chunks), text
 
-
-# Extract video ID
+# Extract YouTube ID
 def extract_video_id(url):
     parsed_url = urlparse(url)
     if parsed_url.hostname in ['www.youtube.com', 'youtube.com']:
         if parsed_url.path == '/watch':
             query_params = parse_qs(parsed_url.query)
             return query_params.get('v', [None])[0]
-        if parsed_url.path.startswith('/embed/'):
-            return parsed_url.path.split('/')[2]
-        if parsed_url.path.startswith('/v/'):
+        if parsed_url.path.startswith(('/embed/', '/v/')):
             return parsed_url.path.split('/')[2]
     elif parsed_url.hostname == 'youtu.be':
         return parsed_url.path[1:]
     return None
 
-# generate transcript
+# Fetch transcript safely
 def generate_transcript(video_id, preferred_lang="en"):
     try:
-        # Try English transcript directly
-        try:
-            transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[preferred_lang])
-        except:
-            # Fallback: try any English variation
-            try:
-                transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=['en-US', 'en-GB'])
-            except:
-                # Fallback: just try auto-generated or whatever is available
-                transcript = YouTubeTranscriptApi.get_transcript(video_id)
-
-        script = '\n'.join([item['text'] for item in transcript])
+        transcript = YouTubeTranscriptApi.get_transcript(video_id, languages=[preferred_lang])
+        script = '\n'.join([t['text'] for t in transcript])
         return script, len(script.split())
-
     except (TranscriptsDisabled, NoTranscriptFound):
-        return None, 0
-    except Exception as e:
-        st.error(f"Transcript error: {e}")
-        return None, 0
-
+        try:
+            # fallback to auto-generated or any available transcript
+            transcript = YouTubeTranscriptApi.get_transcript(video_id)
+            script = '\n'.join([t['text'] for t in transcript])
+            return script, len(script.split())
+        except:
+            return None, 0
 
 # Generate audio
 def generate_audio(text, lang='en'):
     try:
         tts = gTTS(text=text, lang=lang, slow=False)
         tts.save("summary.mp3")
-        with open("summary.mp3", "rb") as audio_file:
-            return audio_file.read()
-    except Exception as e:
-        st.error(f"Error generating audio: {str(e)}")
+        with open("summary.mp3", "rb") as f:
+            return f.read()
+    except:
         return None
-
 
 # --------- UI / APP --------- #
 
 # Hide Streamlit Footer
-hide_streamlit_style = """
+st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
-.css-1l02zno {padding: 0 !important;}
 </style>
-"""
-st.markdown(hide_streamlit_style, unsafe_allow_html=True)
+""", unsafe_allow_html=True)
 
-# Logo
-file_ = open("app_logo.gif", "rb")
-contents = file_.read()
-data_url = base64.b64encode(contents).decode("utf-8")
+# Sidebar logo (replace with your own)
+file_ = open("app_logo.gif","rb")
+data_url = base64.b64encode(file_.read()).decode("utf-8")
 file_.close()
-st.sidebar.markdown(
-    f'<img src="data:image/gif;base64,{data_url}" alt="" style="height:300px; width:400px;">',
-    unsafe_allow_html=True,
-)
+st.sidebar.markdown(f'<img src="data:image/gif;base64,{data_url}" width="300">', unsafe_allow_html=True)
 
-# Input Video Link
-url = st.sidebar.text_input('Video URL', 'https://www.youtube.com/watch?v=T-JVpKku5SI')
+# Video URL input
+url = st.sidebar.text_input("Video URL", "https://www.youtube.com/watch?v=T-JVpKku5SI")
+sumtype = st.sidebar.selectbox("Summarization Type", ["Extractive", "Abstractive (Subtitles)"])
+language_options = {'English':'en', 'Telugu':'te','Hindi':'hi'}
+target_language = st.sidebar.selectbox("Select Language", list(language_options.keys()))
 
-# Display Video and Title
+# Display video
 try:
     r = requests.get(url)
     soup = BeautifulSoup(r.text, "html.parser")
     title = soup.find("title").text.replace("&amp;", "&")
-    st.info("### " + title)
+    st.info("### "+title)
     st.video(url)
-except Exception as e:
-    st.error(f"Error fetching video details: {e}")
+except:
+    st.warning("Could not fetch video info.")
 
-# Summarization Type
-sumtype = st.sidebar.selectbox(
-    'Specify Summarization Type',
-    options=['Extractive', 'Abstractive (Subtitles)'],
-    index=0
-)
-
-# Translation Language
-language_options = {
-    'English': 'en',
-    'Telugu': 'te',
-    'Hindi': 'hi'
-}
-target_language = st.sidebar.selectbox(
-    'Select Language',
-    options=list(language_options.keys()),
-    index=0
-)
-
-transcript_disabled_flag = False
-
-# -------- Main Logic -------- #
-if sumtype == 'Extractive':
-    length = st.sidebar.select_slider(
-        'Specify length of Summary',
-        options=['10%', '20%', '30%', '40%', '50%']
-    )
-
-    if st.sidebar.button('Summarize'):
-        progress = st.progress(0)
-        progress.progress(10)
-
-        video_id = extract_video_id(url)
-        if not video_id:
-            st.error("Invalid YouTube URL.")
+# Main logic
+if st.sidebar.button("Summarize"):
+    video_id = extract_video_id(url)
+    if not video_id:
+        st.error("Invalid YouTube URL")
+    else:
+        transcript, _ = generate_transcript(video_id)
+        if not transcript:
+            st.warning("Transcript is disabled or unavailable")
         else:
-            progress.progress(20)
-            transcript, _ = generate_transcript(video_id)
-
-            if transcript:
-                progress.progress(50)
-                translated_transcript, original_transcript = detect_and_translate(transcript, language_options[target_language])
-
-                if translated_transcript:
-                    progress.progress(70)
-                    summ = spacy_summarize(translated_transcript, int(length[:2]))
-                    if summ.strip():
-                        st.markdown(f"""
-                        <div class="summary-container">
-                            <h3>📖 Summary</h3>
-                            <p>{summ}</p>
-                        </div>
-                        """, unsafe_allow_html=True)
-
-                        progress.progress(90)
-                        audio_bytes = generate_audio(summ, lang=language_options[target_language])
-                        if audio_bytes:
-                            st.audio(audio_bytes, format='audio/mp3')
-                        progress.progress(100)
-                else:
-                    st.markdown(f"""
-                    <div class="summary-container">
-                        <h3>📖 Original Transcript</h3>
-                        <p>{original_transcript}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+            translated, original = detect_and_translate(transcript, language_options[target_language])
+            if sumtype == "Extractive":
+                summary = spacy_summarize(translated, 30)
             else:
-                st.warning("TRANSCRIPT IS DISABLED FOR THIS VIDEO")
+                summary = bart_summarize(translated, 150)
 
-elif sumtype == 'Abstractive (Subtitles)':
-    if st.sidebar.button('Summarize'):
-        progress = st.progress(0)
-        progress.progress(10)
+            st.markdown(f"""
+            <div style='background-color:#ADD8E6;padding:20px;border-radius:10px;'>
+                <h3>📖 Summary / Subtitles</h3>
+                <p>{summary}</p>
+            </div>
+            """, unsafe_allow_html=True)
 
-        video_id = extract_video_id(url)
-        if not video_id:
-            st.error("Invalid YouTube URL.")
-        else:
-            progress.progress(20)
-            transcript, _ = generate_transcript(video_id)
-
-            if transcript:
-                progress.progress(50)
-                translated_transcript, original_transcript = detect_and_translate(transcript, language_options[target_language])
-                if translated_transcript:
-                    st.markdown(f"""
-                    <div class="summary-container">
-                        <h3>🎥 Subtitles</h3>
-                        <p>{translated_transcript}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    st.markdown(f"""
-                    <div class="summary-container">
-                        <h3>🎥 Original Transcript</h3>
-                        <p>{original_transcript}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                progress.progress(100)
-            else:
-                st.warning("TRANSCRIPT IS DISABLED FOR THIS VIDEO")
+            audio_bytes = generate_audio(summary, lang=language_options[target_language])
+            if audio_bytes:
+                st.audio(audio_bytes, format='audio/mp3')
